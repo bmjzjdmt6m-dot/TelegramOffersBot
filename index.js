@@ -1,163 +1,127 @@
-const TelegramBot = require("node-telegram-bot-api");
 
-const TOKEN = process.env.BOT_TOKEN;
+const TelegramBot = require('node-telegram-bot-api');
 
-if (!TOKEN) {
+const token = process.env.BOT_TOKEN;
 
-  throw new Error("Не указан BOT_TOKEN");
-
+if (!token) {
+  console.error('Не найден BOT_TOKEN в Secrets GitHub');
+  process.exit(1);
 }
 
-const bot = new TelegramBot(TOKEN, { polling: true });
+const bot = new TelegramBot(token, { polling: true });
+
+const freeUsers = new Set();
+const offers = new Map();
+let nextId = 1;
+
+function hasAccess(userId) {
+  return freeUsers.has(userId);
+}
 
 bot.onText(/\/start/, (msg) => {
-
   bot.sendMessage(msg.chat.id,
-
-    "🎁 NFT FAKE OFFER MARKET\n\n" +
-
-    "Добро пожаловать!\n\n" +
-
-    "Здесь можно создавать демонстрационные NFT-офферы.",
-
-    {
-
-      reply_markup: {
-
-        keyboard: [
-
-          ["➕ Создать оффер"],
-
-          ["📋 Мои офферы"]
-
-        ],
-
-        resize_keyboard: true
-
-      }
-
-    }
-
+    '👋 Добро пожаловать!\n\n' +
+    '🧪 Это тестовый NFT Offer Bot.\n\n' +
+    'Команды:\n' +
+    '/negative — бесплатный тестовый доступ\n' +
+    '/q ссылка цена(stars)\n' +
+    '/q ссылка цена(Gram)\n' +
+    '/offers — мои тестовые офферы'
   );
-
 });
 
-const offers = {};
+bot.onText(/\/negative/, (msg) => {
+  freeUsers.add(msg.from.id);
+  bot.sendMessage(msg.chat.id,
+    '✅ Бесплатный тестовый доступ активирован!\n\n' +
+    'Теперь можешь создавать демонстрационные офферы.'
+  );
+});
 
-bot.on("message", (msg) => {
+bot.onText(/\/offers/, (msg) => {
+  const userOffers = [...offers.values()]
+    .filter(o => o.userId === msg.from.id);
 
-  const chatId = msg.chat.id;
-
-  const text = msg.text;
-
-  if (!text || text.startsWith("/")) return;
-
-  if (text === "➕ Создать оффер") {
-
-    offers[chatId] = { step: "nft" };
-
-    return bot.sendMessage(chatId, "🎁 Введи название NFT:");
-
+  if (!userOffers.length) {
+    return bot.sendMessage(msg.chat.id, 'У тебя пока нет тестовых офферов.');
   }
 
-  if (text === "📋 Мои офферы") {
+  const text = userOffers.map(o =>
+    `#${o.id} — ${o.amount} ${o.currency}\n${o.url}\nСтатус: ${o.status}`
+  ).join('\n\n');
 
-    const offer = offers[chatId];
+  bot.sendMessage(msg.chat.id, text);
+});
 
-    if (!offer || !offer.name) {
-
-      return bot.sendMessage(chatId, "У тебя пока нет офферов.");
-
+bot.onText(/\/q\s+(\S+)\s+(\d+(?:\.\d+)?)\s*\((stars|gram)\)/i,
+  (msg, match) => {
+    if (!hasAccess(msg.from.id)) {
+      return bot.sendMessage(msg.chat.id,
+        '🔒 Сначала активируй доступ командой /negative.'
+      );
     }
 
-    return bot.sendMessage(
+    const url = match[1];
+    const amount = Number(match[2]);
+    const currency = match[3].toLowerCase() === 'stars' ? 'Stars' : 'Gram';
 
-      chatId,
-
-      `🎁 NFT: ${offer.name}\n💎 Сумма: ${offer.amount} TON\n🧪 Статус: ДЕМО`
-
-    );
-
-  }
-
-  const offer = offers[chatId];
-
-  if (!offer) return;
-
-  if (offer.step === "nft") {
-
-    offer.name = text;
-
-    offer.step = "amount";
-
-    return bot.sendMessage(chatId, "💎 Введи сумму оффера в TON:");
-
-  }
-
-  if (offer.step === "amount") {
-
-    const amount = Number(text);
-
-    if (!Number.isFinite(amount) || amount <= 0) {
-
-      return bot.sendMessage(chatId, "Введи корректную сумму.");
-
+    if (!/^https?:\/\/\S+/i.test(url) || amount <= 0) {
+      return bot.sendMessage(msg.chat.id, 'Проверь ссылку и сумму.');
     }
 
-    offer.amount = amount;
+    const id = nextId++;
 
-    offer.step = "done";
+    offers.set(id, {
+      id,
+      userId: msg.from.id,
+      url,
+      amount,
+      currency,
+      status: 'Ожидает тестовой проверки'
+    });
 
-    return bot.sendMessage(
-
-      chatId,
-
-      `🎁 NFT: ${offer.name}\n` +
-
-      `💎 Предложение: ${amount} TON\n` +
-
-      `🧪 ДЕМО — платежа не было.`,
-
+    bot.sendMessage(msg.chat.id,
+      `🧪 ТЕСТОВОЕ NFT-ПРЕДЛОЖЕНИЕ\n\n` +
+      `🎁 NFT: ${url}\n` +
+      `💰 Сумма: ${amount} ${currency}\n` +
+      `🆔 Номер: ${id}\n\n` +
+      `⚠️ Это симуляция. Настоящая ставка или покупка не создаётся, средства не переводятся.`,
       {
-
         reply_markup: {
-
           inline_keyboard: [
-
-            [{ text: "✅ Принять (демо)", callback_data: "accept" }],
-
-            [{ text: "❌ Отклонить", callback_data: "decline" }]
-
+            [{ text: '🔄 Проверить (тест)', callback_data: `check_${id}` }],
+            [{ text: '❌ Закрыть', callback_data: `close_${id}` }]
           ]
-
         }
-
       }
-
     );
+  }
+);
 
+bot.on('callback_query', (query) => {
+  const [action, idText] = query.data.split('_');
+  const id = Number(idText);
+  const offer = offers.get(id);
+
+  if (!offer || offer.userId !== query.from.id) {
+    return bot.answerCallbackQuery(query.id, {
+      text: 'Оффер не найден.'
+    });
   }
 
+  if (action === 'check') {
+    offer.status = 'Тестовая проверка выполнена';
+    bot.answerCallbackQuery(query.id, {
+      text: 'Тестовая проверка выполнена.'
+    });
+  }
+
+  if (action === 'close') {
+    offer.status = 'Закрыт';
+    bot.answerCallbackQuery(query.id, {
+      text: 'Тестовый оффер закрыт.'
+    });
+  }
 });
 
-bot.on("callback_query", async (query) => {
-
-  const message = query.message;
-
-  const answer = query.data === "accept"
-
-    ? "✅ Демо-оффер принят!"
-
-    : "❌ Демо-оффер отклонён.";
-
-  await bot.answerCallbackQuery(query.id, {
-
-    text: answer
-
-  });
-
-  await bot.sendMessage(message.chat.id, answer);
-
-});
-
-console.log("NFT Demo Offer Bot started!");
+console.log('Test NFT Offer Bot запущен!');
